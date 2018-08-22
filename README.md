@@ -183,7 +183,20 @@ pwnable_tech
   - 그 외에는 _int_free()호출 -> 내부에서 size와 address 검사
   - _int_free에서 arena의 mutext필드에 따라 mutex_lock호출 (mutext_lock는 vtable로 존재하는 걸로 추정)
   - free될 메모리 사이즈가 fastbin size면 fastbin으로 그 이외에는 unsorted bin으로!
-  - double free 체크 루틴 존재끝! free는 별거 없당
+  - 각 bin별로 double free 체크 루틴 존재 -> fastbin만 쓸모 있음
+  ```c
+  // 가장 최근에 free된 chunk(fastbin[idx] head에 적힌 chunk)와 같지만 않으면 됨!
+  do
+      {
+	/* Check that the top of the bin is not the record we are going to add
+	   (i.e., double free).  */
+	if (__builtin_expect (old == p, 0))
+	  {
+	    errstr = "double free or corruption (fasttop)";
+	    goto errout;
+	  }
+  ```
+  - 끝! free는 별거 없당
   
 
 ### 1.1.3. bins
@@ -209,5 +222,60 @@ pwnable_tech
   };
   ```  
 
-## 1.2 glibc2.27 (Ubuntu 18.04) 
-- TCache라는 녀석이 추가됨
+## 1.2. glibc2.27 (Ubuntu 18.04) 
+- tcache라는 녀석이 추가됨
+- tache는 fastbin과 유사하며(single linked list) 모든 size의 chunk들이 여기에 들어감
+- size 체크 없음. fd 수정가능하면 임의의 위치 할당받을 수 있음
+- 개꿀.. 분석은 다음기회에~
+
+
+## 1.3. exploit
+### 1.3.1. fastbin을 이용한 테크닉
+  - fastbin double free
+    1. dobule free검사 로직이 단순해서 쉽게 dobule free 가능(연속으로 같은 chunk만 free 안하면 ok)
+    2. 이를 통해 여러 포인터가 같은 chunk를 가르키게 할 수 있음
+
+  - fastbin attack
+    1. double free를 이용하든, uninitialzied pointer를 이용하든 fastbin chunk의 fd를 조작하면 임의의 공간을 할당받을 수 있음
+    2. 주의사항 - fastbin로 부터 재할당시 size check가 있음. __malloc_hook이나 got에 libc base의 최 상위 바이트인 0x7f를 이용하여 size check 우회
+    3. fastbin attack을 통해 got나 __malloc_hook, vtable과 같은 공간을 할당받고 이를 조작하여 pc컨트롤
+
+### 1.3.2 unsorted bin을 이용한 테크닉
+  - libc leak
+    1. unsortedbin 특성상 fd와 bk가 unsorted bin을 가르킴(main_arena+88 == main_arena.top)
+    2. uninitialized pointer나 user after free와 같은 취약점을 통해 unsroted bin chunk로 부터 libc를 릭할수 있당.
+  
+  - unsortedbin attack
+    1. unsortedbin의 bk를 임의의 주소로 수정하고 unlink시킴으로서 임의의 주소에 main_arena+88 주소를 적을 수 있음
+    2. input_size와 같은 global 변수를 덮을 수 있으면 overflow 유도가능
+    3. 또, unlink시 unsortedbin->bk부분에 임의의 주소가 적힘.
+    4. global 변수에 unsorted bin unlink시 검사하는 size check를 우회할 수 있도록 만들어 놓고, unsorted bin chunk의 bk를 수정할수 있으면 임의의 위치에 chunk할당 가능(써먹을 수 있을까..)
+    ```c
+    // unsorted bin attack으로 임의 주소 할당받기 poc
+    #include<stdlib.h>
+
+    char buf[0x100];
+
+    int main(){
+    void *a = malloc(0x100);
+    void *a1 = malloc(0x10);
+    free(a);
+
+    // 할당받고자 하는 주소(buf)로 unsortedbin chunk bk 변경
+    *(long *)(a+0x8) = (long )&buf;
+
+    // buf->size 부분이 unsorted bin에 해당하는 사이즈여야함.
+    *(long *)(buf+0x8) = 0x111;
+
+    // unlink시 레퍼런스 에러가 발생안하도록 buf->bk에 사용할수 있는 아무 주소 적기.
+    *(long *)(buf+0x18) = (long )&buf+0x30;
+
+    // unsorted bin attack를 트리거하여 unsortedbin->bk를 buf의 주소로수정
+    void *b = malloc(0x100);
+
+    // 그럼 unsroted bin에서 할당되는 녀석은? buf+0x10
+    void *b1 = malloc(0x100);
+    }
+    ```
+  - 
+
