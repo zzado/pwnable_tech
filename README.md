@@ -144,7 +144,7 @@ pwnable_tech
               }
               ```
 
-                2. 1번의 조건이 만족하지 않는 경우, 일단 unsorted bin에서 청크 제거 -> 이과정에서 사이즈나 chain유효 검사가 없어서 unsortedbin attack 발생
+                2. a번의 조건이 만족하지 않는 경우, 일단 unsorted bin에서 청크 제거 -> 이과정에서 사이즈나 chain유효 검사가 없어서 unsortedbin attack 발생
               ```c
               while ((victim = unsorted_chunks (av)->bk) != unsorted_chunks (av))
               {
@@ -154,9 +154,9 @@ pwnable_tech
               unsorted_chunks (av)->bk = bck; // 우리가 수정한 bck가 들어가자너!
               bck->fd = unsorted_chunks (av);
               ```
-                3. 이후 2번에서 unsorted bin으로 부터 제거된 chunk는 해당 사이즈에 맞는 bin으로 들어가게됨!(smallbin or largebin // fastbin x)
+                3. 이후 b번에서 unsorted bin으로 부터 제거된 chunk는 해당 사이즈에 맞는 bin으로 들어가게됨!(smallbin or largebin // fastbin x)
 
-                4. 1번과정 또는 3번과정을 거치면 unsortedbin의 다음 청크에 대하여 똑같은 루틴 수행
+                4. a번과정 또는 c번과정을 거치면 unsortedbin의 다음 청크에 대하여 똑같은 루틴 수행
 
             - unsortedbin attack? unsorted bin의 마지막 chunk의 bk를 수정하여 원하는곳에 main_arena.top주소를 적을 수 있다!
  
